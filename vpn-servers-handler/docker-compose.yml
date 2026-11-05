@@ -12,6 +12,8 @@ services:
     container_name: vpn-servers-handler
     build: .
     restart: always
+    environment:
+      - MAX_SERVERS_TESTED=6
     ports:
       - "43999:43999"
     volumes:

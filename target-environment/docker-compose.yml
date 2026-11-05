@@ -10,7 +10,7 @@ volumes:
 
 services:
   subnet-network-links-keeper:
-    image: alpine:3.19
+    image: alpine:3.24.3
     container_name: subnet-network-links-keeper
     command: ["sh", "-c", "exec sleep infinity"]
     restart: unless-stopped
@@ -28,7 +28,7 @@ services:
 
   gluetun:
     # Important: change this to custom Gluetun docker image incorporating auto-restart on vpn config change
-    # being injected from vpn-servers-handler
+    # being injected from vpn-servers-handler.
     image: yourdockerhubuser/gluetun:latest
     container_name: gluetun
     restart: unless-stopped
@@ -48,10 +48,33 @@ services:
       # should provide  own env vars here for standard auth
       - OPENVPN_USER=changeme
       - OPENVPN_PASSWORD=changeme
+      # or if you want to read from secrets file (RECOMMENDED). Secrets files would need to be uncommented at bottom of this compose yml.
+      #- OPENVPN_USER_SECRETFILE=/run/secrets/GLUETUN_OPENVPN_USER
+      #- OPENVPN_PASSWORD_SECRETFILE=/run/secrets/GLUETUN_OPENVPN_PASSWORD
+      # -------
       # this is port exposed by connection-quality-checker
       # so that vpn-servers-handler can call its API for tests of each server
       - FIREWALL_INPUT_PORTS=43988
       - FIREWALL_DEBUG=on
+      # Change to whatever is needed
+      - TZ=Europe/Berlin
+      # Change to whatever countries you inject to this gluetun from vpn-servers-handler. By default, US servers only.
+      - SERVER_COUNTRIES=United States
+      # Change to whatever servers types are needed (paid/free). Free only are injected by defaylt.
+      - FREE_ONLY=on
+      # Quad 9 DNS by default
+      - DNS_UPSTREAM_RESOLVER_TYPE=doh
+      - DNS_UPSTREAM_RESOLVERS=quad9 secured
+      - DNS_CACHING=off
+      - DNS_UPSTREAM_IPV6=off
+      - DNS_UPDATE_PERIOD=0
+      - BLOCK_MALICIOUS=on
+      - BLOCK_SURVEILLANCE=on
+      # Optionally uncomment for exposing the shadowsocks proxy
+      #- SHADOWSOCKS=on
+      #- SHADOWSOCKS_LOG=on
+      #- SHADOWSOCKS_PASSWORD_SECRETFILE=/run/secrets/GLUETUN_SHADOWSOCKS_PASSWORD
+      #- SHADOWSOCKS_CIPHER=chacha20-ietf-poly1305
 
   connection-quality-checker:
     build: ./connection-quality-checker
@@ -72,3 +95,12 @@ services:
     network_mode: "service:subnet-network-links-keeper"
     depends_on:
       - gluetun
+
+############# SECRETS ##############
+#secrets:
+#  GLUETUN_OPENVPN_USER:
+#    file: /home/user/Documents/docker/secrets/GLUETUN_OPENVPN_USER
+#  GLUETUN_OPENVPN_PASSWORD:
+#    file: /home/user/Documents/docker/secrets/GLUETUN_OPENVPN_PASSWORD
+#  GLUETUN_SHADOWSOCKS_PASSWORD:
+#    file: /home/user/Documents/docker/secrets/GLUETUN_SHADOWSOCKS_PASSWORD

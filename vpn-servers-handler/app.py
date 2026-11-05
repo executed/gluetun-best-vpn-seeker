@@ -18,7 +18,7 @@ MANUAL_SERVERS_FILE = "data/servers.json"
 SERVER_CONSIDERED_ALREADY_USED_SEC = 36000
 LOAD_UPPER_LIMIT_PCT = 95
 LOAD_LOWER_LIMIT_PCT = 70
-BEST_SERVER_MAX_COUNT = 6
+BEST_SERVER_MAX_COUNT = int(os.environ.get("MAX_SERVERS_TESTED", 6))
 
 # DNS Alias pointing to the target environment's Subnet Keeper container
 TARGET_ENV_HOST = "http://target-env-network:43988"
@@ -57,20 +57,24 @@ def shutdown_target_checker():
         pass
     logger.info("Sent shutdown/restart signal to Connection Quality Checker.")
 
-def wait_for_endpoint_success(url, method="GET", retry_interval=5, timeout_seconds=120):
+def wait_for_endpoint_success(url, method="GET", retry_interval=5, timeout_seconds=120, ignore_abort=False):
     global abort_test_flag
     start_time = time.time()
     while True:
-        if abort_test_flag:
+        # Ignore the abort flag if we explicitly bypass it
+        if abort_test_flag and not ignore_abort:
             raise InterruptedError("Testing aborted.")
+
         try:
             resp = requests.request(method, url, timeout=5)
             if resp.status_code == 200:
                 return resp.json()
         except requests.RequestException:
             pass
+
         if time.time() - start_time > timeout_seconds:
             raise TimeoutError(f"Timeout waiting for 200 OK from {url}.")
+
         time.sleep(retry_interval)
 
 def generate_vpn_config(ip_address: str):
@@ -106,6 +110,38 @@ def analyze_and_collect_best_servers():
         return _analyze_and_collect_best_servers()
     finally:
         testing_lock.release()
+
+@app.route('/prepare-vpn-server', methods=['GET', 'POST'])
+def prepare_vpn_server():
+    global best_servers_fifo_queue, abort_test_flag
+
+    if len(best_servers_fifo_queue) == 0:
+        return jsonify({"error": "No servers in memory. Run /best-server first."}), 404
+
+    abort_test_flag = True  # Stop any ongoing testing
+    time.sleep(1) # Allow testing loop to cleanly abort
+
+    # Pop from the left (the best one) to move to the next best
+    server = best_servers_fifo_queue.popleft()
+    ip_address = server.get("ip")
+
+    logger.info(f"🚀 Moving to next best server in queue: {server['name']} ({ip_address})")
+    generate_vpn_config(ip_address)
+
+    try:
+        logger.info("⏳ Waiting for healthcheck on the new VPN server...")
+        # Add ignore_abort=True here!
+        wait_for_endpoint_success(f"{TARGET_ENV_HOST}/healthcheck", timeout_seconds=120, ignore_abort=True)
+
+        return jsonify({
+            "message": "VPN server prepared successfully",
+            "servers_left_in_queue": len(best_servers_fifo_queue),
+            "server": server
+        }), 200
+    except Exception as e:
+        logger.error(f"Failed to prepare VPN server: {e}")
+        return jsonify({"error": str(e)}), 500
+
 
 def _analyze_and_collect_best_servers():
     global abort_test_flag, best_servers_fifo_queue
@@ -170,8 +206,21 @@ def _analyze_and_collect_best_servers():
             new_best_server.update(test_details)
             best_servers_fifo_queue.append(new_best_server)
 
+            logger.info("Artificial 60s delay between testing new VPNs to avoid rate-limiting.")
+            time.sleep(60)
+
             if len(best_servers_fifo_queue) >= BEST_SERVER_MAX_COUNT:
-                return jsonify(new_best_server)
+                # We reached max capacity. The last tested server is the worst of the best.
+                # Let's deploy the FIRST one in the queue (the absolute best) before returning.
+                best_server = best_servers_fifo_queue[0]
+                logger.info(f"✅ Testing complete. Deploying the absolute BEST server: {best_server['name']} ({best_server['ip']})")
+
+                generate_vpn_config(best_server['ip'])
+
+                logger.info("⏳ Waiting for Target Environment healthcheck to stabilize on the best server...")
+                wait_for_endpoint_success(f"{TARGET_ENV_HOST}/healthcheck", timeout_seconds=120)
+
+                return jsonify(list(best_servers_fifo_queue))
 
         if len(best_servers_fifo_queue) > 0:
             return jsonify(list(best_servers_fifo_queue))
