@@ -1,0 +1,21 @@
+networks:
+  shared_interop_network:
+    name: shared_interop_network  # Explicitly named so Docker doesn't prefix it
+    driver: bridge
+
+volumes:
+  shared_vpn_config_vol:
+    name: shared_vpn_config_vol   # Explicitly named volume
+
+services:
+  vpn-servers-handler:
+    container_name: vpn-servers-handler
+    build: .
+    restart: always
+    ports:
+      - "43999:43999"
+    volumes:
+      # Mount the explicit volume directly into the handler
+      - shared_vpn_config_vol:/app/data/target-env-gluetun
+    networks:
+      - shared_interop_network

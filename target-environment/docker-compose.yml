@@ -1,0 +1,74 @@
+networks:
+  shared_interop_network:
+    name: shared_interop_network
+    external: true  # Fully relies on vpn-servers-handler to create it
+
+volumes:
+  shared_vpn_config_vol:
+    name: shared_vpn_config_vol
+    external: true  # Fully relies on vpn-servers-handler to create it
+
+services:
+  subnet-network-links-keeper:
+    image: alpine:3.19
+    container_name: subnet-network-links-keeper
+    command: ["sh", "-c", "exec sleep infinity"]
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    # this is port exposed by connection-quality-checker
+    # so that vpn-servers-handler can call its API for tests of each server
+    ports:
+      - "43988:43988"
+    networks:
+      shared_interop_network:
+        aliases:
+          # This is vital: Provides DNS resolution for the Python Controller
+          - target-env-network
+
+  gluetun:
+    # Important: change this to custom Gluetun docker image incorporating auto-restart on vpn config change
+    # being injected from vpn-servers-handler
+    image: yourdockerhubuser/gluetun:latest
+    container_name: gluetun
+    restart: unless-stopped
+    network_mode: "service:subnet-network-links-keeper"
+    cap_add:
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      # Receives the JSON created by VPN Server Handler
+      - shared_vpn_config_vol:/gluetun
+    environment:
+      - VPN_SERVICE_PROVIDER=protonvpn
+      - VPN_TYPE=openvpn
+      # should provide  own env vars here for standard auth
+      - OPENVPN_USER=changeme
+      - OPENVPN_PASSWORD=changeme
+      # this is port exposed by connection-quality-checker
+      # so that vpn-servers-handler can call its API for tests of each server
+      - FIREWALL_INPUT_PORTS=43988
+      - FIREWALL_DEBUG=on
+
+  connection-quality-checker:
+    build: ./connection-quality-checker
+    container_name: connection-quality-checker
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    network_mode: "service:subnet-network-links-keeper"
+    depends_on:
+      - gluetun
+
+  target-application:
+    build: ./target-application
+    container_name: target-application
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    network_mode: "service:subnet-network-links-keeper"
+    depends_on:
+      - gluetun
