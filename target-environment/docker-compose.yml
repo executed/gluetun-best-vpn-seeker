@@ -20,6 +20,9 @@ services:
     # so that vpn-servers-handler can call its API for tests of each server
     ports:
       - "43988:43988"
+      # Uncomment for exposing the Shadowsocks proxy
+      #- "8388:8388/tcp"
+      #- "8388:8388/udp"
     networks:
       shared_interop_network:
         aliases:
